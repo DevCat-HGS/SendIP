@@ -14,14 +14,30 @@ from concurrent.futures import ThreadPoolExecutor
 
 init(autoreset=True)
 
-# Configuración global
+# Global Configuration / Configuración Global
+
+# Enable verbose output / Habilitar salida detallada
 VERBOSE = False
+
+# Maximum number of concurrent threads / Número máximo de hilos concurrentes
 MAX_THREADS = 10
+
+# List of ports to scan / Lista de puertos a escanear
 EXTENDED_PORTS = [20, 21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995, 1723, 3306, 3389, 5900, 8080]
+
+# Connection timeout in seconds / Tiempo de espera de conexión en segundos
 TIMEOUT = 1
+
+# Characters for matrix effect / Caracteres para el efecto matrix
 MATRIX_CHARS = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(50))
 
 def matrix_effect():
+    """Creates a Matrix-style visual effect in the terminal.
+    Crea un efecto visual estilo Matrix en la terminal.
+    
+    The effect displays random characters in green color, simulating the iconic Matrix digital rain.
+    El efecto muestra caracteres aleatorios en color verde, simulando la icónica lluvia digital de Matrix.
+    """
     for _ in range(3):
         for char in MATRIX_CHARS:
             print(f"{Fore.GREEN}{char}", end='', flush=True)
@@ -47,6 +63,16 @@ def print_banner():
     time.sleep(0.1)
 
 def check_common_vulnerabilities(host, port):
+    """Check for common vulnerabilities in web servers.
+    Verifica vulnerabilidades comunes en servidores web.
+    
+    Args:
+        host (str): Target host / Host objetivo
+        port (int): Port to check / Puerto a verificar
+    
+    Returns:
+        list: List of found vulnerabilities / Lista de vulnerabilidades encontradas
+    """
     vulnerabilities = []
     try:
         # Verificar versiones obsoletas comunes
@@ -65,6 +91,15 @@ def check_common_vulnerabilities(host, port):
     return vulnerabilities
 
 def detect_os(host):
+    """Detect the operating system of a remote host using TTL analysis.
+    Detecta el sistema operativo de un host remoto usando análisis TTL.
+    
+    Args:
+        host (str): Target host / Host objetivo
+    
+    Returns:
+        tuple: (OS type, is_alive) / (Tipo de SO, está_activo)
+    """
     try:
         # Realizar ping y capturar TTL
         if platform.system() == "Windows":
@@ -195,6 +230,16 @@ def get_service_banner(host, port):
         return ""
 
 def scan_ports(host):
+    """Scan ports on target host using multiple threads.
+    Escanea puertos en el host objetivo usando múltiples hilos.
+    
+    Args:
+        host (str): Target host / Host objetivo
+    
+    Prints:
+        Information about open ports and services
+        Información sobre puertos abiertos y servicios
+    """
     print(Fore.YELLOW + "\n[+] Iniciando escaneo de puertos...")
     ports = EXTENDED_PORTS if VERBOSE else EXTENDED_PORTS[:10]
     results = []
