@@ -9,10 +9,17 @@ import random
 import string
 import sys
 import asyncio
+import json
+import csv
 from datetime import datetime
 from colorama import init, Fore, Back, Style
 from concurrent.futures import ThreadPoolExecutor
 from scanner_utils import ScannerUtils
+from tqdm import tqdm
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
+from rich.console import Console
+from rich.theme import Theme
+from jinja2 import Template
 
 init(autoreset=True)
 
@@ -20,6 +27,7 @@ init(autoreset=True)
 
 # Enable verbose output / Habilitar salida detallada
 VERBOSE = False
+SILENT_MODE = False
 
 # Maximum number of concurrent threads / Número máximo de hilos concurrentes
 MAX_THREADS = 10
@@ -32,6 +40,40 @@ TIMEOUT = 1
 
 # Characters for matrix effect / Caracteres para el efecto matrix
 MATRIX_CHARS = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(50))
+
+# Visual Themes / Temas Visuales
+THEMES = {
+    'classic': {
+        'info': Fore.CYAN,
+        'success': Fore.GREEN,
+        'warning': Fore.YELLOW,
+        'error': Fore.RED,
+        'banner': Fore.GREEN,
+        'accent': Fore.CYAN
+    },
+    'matrix': {
+        'info': Fore.GREEN,
+        'success': Fore.GREEN,
+        'warning': Fore.GREEN,
+        'error': Fore.RED,
+        'banner': Fore.GREEN,
+        'accent': Fore.GREEN
+    },
+    'minimal': {
+        'info': Fore.WHITE,
+        'success': Fore.WHITE,
+        'warning': Fore.WHITE,
+        'error': Fore.RED,
+        'banner': Fore.WHITE,
+        'accent': Fore.WHITE
+    }
+}
+
+# Current theme / Tema actual
+CURRENT_THEME = THEMES['classic']
+
+# Rich console for advanced output / Consola Rich para salida avanzada
+console = Console(theme=Theme({'info': 'cyan', 'success': 'green', 'warning': 'yellow', 'error': 'red'}))
 
 def matrix_effect():
     """Creates a Matrix-style visual effect in the terminal.
@@ -276,7 +318,7 @@ def print_status(message, status_type="info"):
     if VERBOSE:
         print(f"{color}[{timestamp}] {message}")
 
-async def scan_target(host, start_time):
+async def scan_target(host, start_time, progress=None):
     scanner = ScannerUtils()
     results = {
         'host': host,
@@ -290,97 +332,214 @@ async def scan_target(host, start_time):
     
     if ping_host(host):
         results['status'] = 'success'
-        print_status("Iniciando análisis detallado...", "info")
+        if not SILENT_MODE:
+            print_status("Iniciando análisis detallado...", "info")
+        
+        # Configurar barra de progreso
+        if progress:
+            task_id = progress.add_task(f"[cyan]Escaneando {host}", total=100)
+            progress.update(task_id, advance=10)
         
         # Escaneo avanzado asíncrono
         advanced_scan = await scanner.scan_target_async(host)
         results['advanced_info'] = advanced_scan
+        if progress: progress.update(task_id, advance=20)
         
         # Mostrar información de WAF si se detectó
         if advanced_scan.get('results') and advanced_scan['results'][0].get('waf_detection', {}).get('detected'):
             waf_info = advanced_scan['results'][0]['waf_detection']
-            print(Fore.YELLOW + f"\n[!] WAF Detectado: {waf_info['waf_type']}")
+            if not SILENT_MODE:
+                console.print(f"\n[warning]WAF Detectado: {waf_info['waf_type']}")
+        if progress: progress.update(task_id, advance=10)
         
         # Mostrar información de geolocalización
         if advanced_scan.get('results') and advanced_scan['results'][0].get('geolocation'):
             geo_info = advanced_scan['results'][0]['geolocation']
-            if 'error' not in geo_info:
-                print(Fore.CYAN + f"\n[*] Geolocalización:")
-                print(Fore.CYAN + f"    ├─ País: {geo_info['country']}")
-                print(Fore.CYAN + f"    ├─ Ciudad: {geo_info['city']}")
-                print(Fore.CYAN + f"    └─ Coordenadas: {geo_info['latitude']}, {geo_info['longitude']}")
+            if 'error' not in geo_info and not SILENT_MODE:
+                console.print("\n[info]Geolocalización:")
+                console.print(f"    ├─ País: {geo_info['country']}")
+                console.print(f"    ├─ Ciudad: {geo_info['city']}")
+                console.print(f"    └─ Coordenadas: {geo_info['latitude']}, {geo_info['longitude']}")
+        if progress: progress.update(task_id, advance=10)
         
         # Escaneo de servicios web y SSL
         web_info = detect_http_info(host)
         if web_info:
             results['web_info'] = web_info
-            print(Fore.MAGENTA + "\n" + web_info)
+            if not SILENT_MODE:
+                console.print(f"\n{web_info}", style="info")
             
             # Mostrar información SSL si está disponible
             if advanced_scan.get('results') and advanced_scan['results'][0].get('ssl_info'):
                 ssl_info = advanced_scan['results'][0]['ssl_info']
-                if 'error' not in ssl_info:
-                    print(Fore.GREEN + f"\n[+] Información SSL:")
-                    print(Fore.GREEN + f"    ├─ Versión: {ssl_info['version']}")
-                    print(Fore.GREEN + f"    ├─ Cifrado: {ssl_info['cipher']}")
-                    print(Fore.GREEN + f"    └─ Válido hasta: {ssl_info['not_after']}")
+                if 'error' not in ssl_info and not SILENT_MODE:
+                    console.print("\n[success]Información SSL:")
+                    console.print(f"    ├─ Versión: {ssl_info['version']}")
+                    console.print(f"    ├─ Cifrado: {ssl_info['cipher']}")
+                    console.print(f"    └─ Válido hasta: {ssl_info['not_after']}")
+        if progress: progress.update(task_id, advance=20)
         
         # Escaneo de puertos y vulnerabilidades
         scan_ports(host)
+        if progress: progress.update(task_id, advance=20)
         
         # Análisis de vulnerabilidades en puertos web
         for port in [80, 443]:
             vulns = check_common_vulnerabilities(host, port)
             if vulns:
                 results['vulnerabilities'].extend(vulns)
-                for vuln in vulns:
-                    print(Fore.YELLOW + f"[!] {vuln}")
+                if not SILENT_MODE:
+                    for vuln in vulns:
+                        console.print(f"[warning][!] {vuln}")
+        if progress: progress.update(task_id, advance=10)
     
     return results
 
+def export_results(results, format_type, filename):
+    """Export scan results in different formats.
+    Exporta los resultados del escaneo en diferentes formatos.
+    
+    Args:
+        results (list): Scan results / Resultados del escaneo
+        format_type (str): Export format (json, csv, html) / Formato de exportación
+        filename (str): Output filename / Nombre del archivo de salida
+    """
+    if format_type == 'json':
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=4, ensure_ascii=False)
+    
+    elif format_type == 'csv':
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Host', 'Estado', 'Sistema Operativo', 'Vulnerabilidades'])
+            for result in results:
+                vulns = ', '.join(result.get('vulnerabilities', [])) or 'Ninguna'
+                writer.writerow([result['host'], result['status'], 
+                                result.get('os_info', 'Desconocido'), vulns])
+    
+    elif format_type == 'html':
+        template_str = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Reporte de Escaneo</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .success { color: green; }
+                .error { color: red; }
+                .warning { color: orange; }
+                table { border-collapse: collapse; width: 100%; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+            </style>
+        </head>
+        <body>
+            <h1>Reporte de Escaneo de Red</h1>
+            <table>
+                <tr>
+                    <th>Host</th>
+                    <th>Estado</th>
+                    <th>Sistema Operativo</th>
+                    <th>Vulnerabilidades</th>
+                </tr>
+                {% for result in results %}
+                <tr>
+                    <td>{{ result.host }}</td>
+                    <td class="{{ 'success' if result.status == 'success' else 'error' }}">{{ result.status }}</td>
+                    <td>{{ result.os_info or 'Desconocido' }}</td>
+                    <td class="{{ 'warning' if result.vulnerabilities else '' }}">
+                        {% if result.vulnerabilities %}
+                            <ul>
+                            {% for vuln in result.vulnerabilities %}
+                                <li>{{ vuln }}</li>
+                            {% endfor %}
+                            </ul>
+                        {% else %}
+                            Ninguna
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </body>
+        </html>
+        """
+        template = Template(template_str)
+        html_content = template.render(results=results)
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
 async def main():
-    global VERBOSE
+    global VERBOSE, SILENT_MODE, CURRENT_THEME
     print_banner()
     
     # Configuración inicial
-    print(Fore.CYAN + "\n[?] Ingrese IPs o dominios (separados por comas): " + Fore.RESET)
+    console.print("\n[?] Ingrese IPs o dominios (separados por comas): ", style="info")
     hosts = [h.strip() for h in input().split(',')]
-    verbose = input(Fore.CYAN + "[?] ¿Modo verbose? (s/N): " + Fore.RESET).strip().lower() == 's'
-    VERBOSE = verbose
+    
+    console.print("[?] Seleccione el tema visual (classic/matrix/minimal): ", style="info")
+    theme = input().strip().lower()
+    if theme in THEMES:
+        CURRENT_THEME = THEMES[theme]
+    
+    console.print("[?] ¿Modo verbose? (s/N): ", style="info")
+    VERBOSE = input().strip().lower() == 's'
+    
+    console.print("[?] ¿Modo silencioso? (s/N): ", style="info")
+    SILENT_MODE = input().strip().lower() == 's'
+    
+    console.print("[?] ¿Exportar resultados? (json/csv/html/n): ", style="info")
+    export_format = input().strip().lower()
     
     print("\n" + "═" * 50)
     start_time = datetime.now()
     
-    # Escaneo de múltiples objetivos
-    tasks = [scan_target(host, start_time) for host in hosts]
-    results = await asyncio.gather(*tasks)
+    # Configurar barra de progreso
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        disable=SILENT_MODE
+    ) as progress:
+        # Escaneo de múltiples objetivos
+        tasks = [scan_target(host, start_time, progress) for host in hosts]
+        results = await asyncio.gather(*tasks)
     
     # Resumen final
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     
-    print("\n" + "═" * 50)
-    print(Fore.GREEN + "\n[+] Resumen del escaneo:")
-    for result in results:
-        status_color = Fore.GREEN if result['status'] == 'success' else Fore.RED
-        print(f"\n{status_color}[*] Host: {result['host']}")
-        if result['status'] == 'success':
-            if result['vulnerabilities']:
-                print(Fore.YELLOW + "    ├─ Vulnerabilidades detectadas:")
+    if not SILENT_MODE:
+        print("\n" + "═" * 50)
+        console.print("\n[success][+] Resumen del escaneo:")
+        for result in results:
+            status_style = "success" if result['status'] == 'success' else "error"
+            console.print(f"\n[{status_style}][*] Host: {result['host']}")
+            if result['status'] == 'success' and result['vulnerabilities']:
+                console.print("    ├─ Vulnerabilidades detectadas:", style="warning")
                 for vuln in result['vulnerabilities']:
-                    print(Fore.YELLOW + f"    │  └─ {vuln}")
+                    console.print(f"    │  └─ {vuln}", style="warning")
+        
+        print("\n" + "═" * 50)
+        console.print(f"\n[success][+] Escaneo completo en {duration:.2f} segundos")
+        
+        if VERBOSE:
+            console.print("[info][*] Detalles adicionales:")
+            console.print(f"    ├─ Objetivos escaneados: {len(hosts)}")
+            console.print(f"    ├─ Tiempo inicio: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            console.print(f"    ├─ Tiempo fin: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            console.print(f"    └─ Duración total: {duration:.2f}s")
+        
+        print("\n" + "═" * 50)
     
-    print("\n" + "═" * 50)
-    print(Fore.GREEN + f"\n[+] Escaneo completo en {duration:.2f} segundos")
-    
-    if VERBOSE:
-        print(Fore.CYAN + "[*] Detalles adicionales:")
-        print(Fore.CYAN + f"    ├─ Objetivos escaneados: {len(hosts)}")
-        print(Fore.CYAN + f"    ├─ Tiempo inicio: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(Fore.CYAN + f"    ├─ Tiempo fin: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(Fore.CYAN + f"    └─ Duración total: {duration:.2f}s")
-    
-    print("\n" + "═" * 50)
+    # Exportar resultados si se solicitó
+    if export_format in ['json', 'csv', 'html']:
+        filename = f"scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+        export_results(results, export_format, filename)
+        if not SILENT_MODE:
+            console.print(f"\n[success][+] Resultados exportados a: {filename}")
 
 if __name__ == "__main__":
     asyncio.run(main())
