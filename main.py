@@ -8,9 +8,11 @@ import queue
 import random
 import string
 import sys
+import asyncio
 from datetime import datetime
 from colorama import init, Fore, Back, Style
 from concurrent.futures import ThreadPoolExecutor
+from scanner_utils import ScannerUtils
 
 init(autoreset=True)
 
@@ -274,25 +276,54 @@ def print_status(message, status_type="info"):
     if VERBOSE:
         print(f"{color}[{timestamp}] {message}")
 
-def scan_target(host, start_time):
+async def scan_target(host, start_time):
+    scanner = ScannerUtils()
     results = {
         'host': host,
         'status': 'error',
         'os_info': None,
         'web_info': None,
         'vulnerabilities': [],
-        'ports': []
+        'ports': [],
+        'advanced_info': None
     }
     
     if ping_host(host):
         results['status'] = 'success'
         print_status("Iniciando análisis detallado...", "info")
         
-        # Escaneo de servicios web
+        # Escaneo avanzado asíncrono
+        advanced_scan = await scanner.scan_target_async(host)
+        results['advanced_info'] = advanced_scan
+        
+        # Mostrar información de WAF si se detectó
+        if advanced_scan.get('results') and advanced_scan['results'][0].get('waf_detection', {}).get('detected'):
+            waf_info = advanced_scan['results'][0]['waf_detection']
+            print(Fore.YELLOW + f"\n[!] WAF Detectado: {waf_info['waf_type']}")
+        
+        # Mostrar información de geolocalización
+        if advanced_scan.get('results') and advanced_scan['results'][0].get('geolocation'):
+            geo_info = advanced_scan['results'][0]['geolocation']
+            if 'error' not in geo_info:
+                print(Fore.CYAN + f"\n[*] Geolocalización:")
+                print(Fore.CYAN + f"    ├─ País: {geo_info['country']}")
+                print(Fore.CYAN + f"    ├─ Ciudad: {geo_info['city']}")
+                print(Fore.CYAN + f"    └─ Coordenadas: {geo_info['latitude']}, {geo_info['longitude']}")
+        
+        # Escaneo de servicios web y SSL
         web_info = detect_http_info(host)
         if web_info:
             results['web_info'] = web_info
             print(Fore.MAGENTA + "\n" + web_info)
+            
+            # Mostrar información SSL si está disponible
+            if advanced_scan.get('results') and advanced_scan['results'][0].get('ssl_info'):
+                ssl_info = advanced_scan['results'][0]['ssl_info']
+                if 'error' not in ssl_info:
+                    print(Fore.GREEN + f"\n[+] Información SSL:")
+                    print(Fore.GREEN + f"    ├─ Versión: {ssl_info['version']}")
+                    print(Fore.GREEN + f"    ├─ Cifrado: {ssl_info['cipher']}")
+                    print(Fore.GREEN + f"    └─ Válido hasta: {ssl_info['not_after']}")
         
         # Escaneo de puertos y vulnerabilidades
         scan_ports(host)
@@ -307,7 +338,7 @@ def scan_target(host, start_time):
     
     return results
 
-def main():
+async def main():
     global VERBOSE
     print_banner()
     
@@ -321,11 +352,8 @@ def main():
     start_time = datetime.now()
     
     # Escaneo de múltiples objetivos
-    results = []
-    for host in hosts:
-        print(Fore.CYAN + f"\n[*] Escaneando objetivo: {host}")
-        result = scan_target(host, start_time)
-        results.append(result)
+    tasks = [scan_target(host, start_time) for host in hosts]
+    results = await asyncio.gather(*tasks)
     
     # Resumen final
     end_time = datetime.now()
@@ -353,6 +381,9 @@ def main():
         print(Fore.CYAN + f"    └─ Duración total: {duration:.2f}s")
     
     print("\n" + "═" * 50)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 if __name__ == "__main__":
     main()
